@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Cardiographe</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f8f8f7;
+    --ink: #1c1c1c;
+    --muted: #8a8a88;
+    --line: #e4e4e1;
+    --red: #c8141e;
+    --red-soft: #fbe9e9;
+    color-scheme: light;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  *, *::before, *::after { box-sizing: inherit; }
+  html { height: 100%; scroll-padding-top: env(safe-area-inset-top, 0px); }
+  body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Hanken Grotesk', system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---------- Cœur suspendu ---------- */
+  .stage {
+    position: absolute;
+    top: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(300px, 60vw);
+    pointer-events: none;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  .cables {
+    position: relative;
+    height: clamp(120px, 18vh, 200px);
+    margin-bottom: -14px;
+  }
+  .cable {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 14px;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .cable.c1 { left: 29%; }
+  .cable.c2 { left: 47%; }
+  .cable.c3 { left: 66%; }
+  .wire {
+    flex: 1;
+    width: 3px;
+    background: linear-gradient(90deg, #111, #484848 50%, #111);
+    border-radius: 2px;
+  }
+  .c1 .wire { width: 2.5px; }
+  .c2 .wire { width: 3.5px; }
+  .jack { flex: none; display: block; width: 14px; height: 72px; }
+
+  .heart-wrap { position: relative; }
+  .glow {
+    position: absolute;
+    inset: 12% -18% -6% -18%;
+    background: radial-gradient(closest-side, rgba(220, 30, 40, .55), rgba(220, 30, 40, 0) 100%);
+    opacity: .1;
+    filter: blur(24px);
+    will-change: opacity, transform;
+  }
+  #heart {
+    position: relative;
+    display: block;
+    width: 100%;
+    height: auto;
+    mix-blend-mode: multiply;
+    transform-origin: 50% 18%;
+    will-change: transform;
+  }
+
+  /* ---------- Panneau ---------- */
+  .panel {
+    position: fixed;
+    left: 32px;
+    bottom: calc(28px + env(safe-area-inset-bottom, 0px));
+    width: 232px;
+    z-index: 5;
+  }
+  .reading {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    line-height: 1;
+  }
+  #bpm {
+    font-size: 72px;
+    font-weight: 300;
+    letter-spacing: -0.04em;
+    font-variant-numeric: tabular-nums;
+    min-width: 2ch;
+  }
+  .unit { font-size: 14px; font-weight: 500; color: var(--red); }
+
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0 22px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #cfcfcb; flex: none; }
+  .dot.live { background: #2f9e5b; animation: blink 1.6s ease-in-out infinite; }
+  .dot.sim { background: var(--red); }
+  .dot.wait { background: #d9a21b; }
+  @keyframes blink { 50% { opacity: .35; } }
+
+  .actions { display: flex; flex-direction: column; gap: 8px; }
+  button {
+    font: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    padding: 11px 16px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background-color .2s, border-color .2s, color .2s;
+  }
+  .primary { background: var(--red); color: #fff; border: 1px solid var(--red); }
+  .primary:hover { background: #a90f18; border-color: #a90f18; }
+  .ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+  .ghost:hover { border-color: #bdbdb8; }
+  .ghost.active { color: var(--red); border-color: var(--red); background: var(--red-soft); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+
+  .sim-controls { margin-top: 20px; }
+  .sim-controls[hidden] { display: none; }
+  .sim-controls label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 13px;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .sim-controls output { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+  input[type=range] { -webkit-appearance: none; appearance: none; width: 100%; background: transparent; margin: 0; height: 20px; }
+  input[type=range]::-webkit-slider-runnable-track { height: 2px; background: var(--line); border-radius: 2px; }
+  input[type=range]::-moz-range-track { height: 2px; background: var(--line); border-radius: 2px; }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; width: 16px; height: 16px; margin-top: -7px;
+    border-radius: 50%; background: var(--red); border: 0; cursor: pointer;
+  }
+  input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--red); border: 0; cursor: pointer; }
+
+  [hidden] { display: none !important; }
+  .primary.active { background: #fff; color: var(--red); }
+  .wave { display: block; width: 100%; height: 36px; margin: -8px 0 16px; }
+  .cam { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+  /* ---------- Message ---------- */
+  .toast {
+    position: fixed;
+    top: calc(20px + env(safe-area-inset-top, 0px));
+    left: 50%;
+    transform: translate(-50%, -8px);
+    max-width: min(440px, calc(100vw - 32px));
+    padding: 10px 18px;
+    background: #fff;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    font-size: 13px;
+    text-align: center;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s, transform .25s;
+    z-index: 10;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  @media (max-width: 640px) {
+    .panel { left: 20px; right: 20px; width: auto; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); }
+    #bpm { font-size: 56px; }
+    .status { margin: 8px 0 16px; }
+    .actions { flex-direction: row; flex-wrap: wrap; }
+    .actions button { flex: 1 1 auto; padding-left: 10px; padding-right: 10px; }
+    .stage { width: min(230px, 54vw); }
+    .cables { height: clamp(90px, 12vh, 125px); }
+    .cable { width: 11px; }
+    .jack { width: 11px; height: 57px; }
+  }
+</style>
+</head>
+<body>
+
+  <div class="stage" aria-hidden="true">
+    <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="metal" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stop-color="#8d8d89"/>
+          <stop offset=".3" stop-color="#f4f4f1"/>
+          <stop offset=".65" stop-color="#c3c3be"/>
+          <stop offset="1" stop-color="#777773"/>
+        </linearGradient>
+        <linearGradient id="rubber" x1="0" x2="1" y1="0" y2="0">
+          <stop offset="0" stop-color="#0f0f0f"/>
+          <stop offset=".35" stop-color="#474747"/>
+          <stop offset="1" stop-color="#0f0f0f"/>
+        </linearGradient>
+        <symbol id="jack" viewBox="0 0 12 62">
+          <path d="M4.2 0h3.6l1 15H3.2z" fill="url(#rubber)"/>
+          <rect x="1" y="15" width="10" height="21" rx="1.6" fill="url(#metal)"/>
+          <rect x="3" y="36" width="6" height="6" fill="url(#metal)"/>
+          <rect x="3" y="42" width="6" height="2" fill="#151515"/>
+          <rect x="3" y="44" width="6" height="6" fill="url(#metal)"/>
+          <rect x="3" y="50" width="6" height="2" fill="#151515"/>
+          <path d="M3 52h6v7a3 3 0 0 1-6 0z" fill="url(#metal)"/>
+        </symbol>
+      </defs>
+    </svg>
+    <div class="cables">
+      <div class="cable c1"><span class="wire"></span><svg class="jack" aria-hidden="true"><use href="#jack"/></svg></div>
+      <div class="cable c2"><span class="wire"></span><svg class="jack" aria-hidden="true"><use href="#jack"/></svg></div>
+      <div class="cable c3"><span class="wire"></span><svg class="jack" aria-hidden="true"><use href="#jack"/></svg></div>
+    </div>
+    <div class="heart-wrap">
+      <div class="glow" id="glow"></div>
+      <img id="heart" alt="" src="heart.png">
+    </div>
+  </div>
+
+  <main class="panel">
+    <div class="reading">
+      <span id="bpm">--</span>
+      <span class="unit">bpm</span>
+    </div>
+    <div class="status" aria-live="polite">
+      <span class="dot" id="dot"></span>
+      <span id="status">Aucun capteur connecté</span>
+    </div>
+    <canvas id="wave" class="wave" width="464" height="72" hidden></canvas>
+    <video id="cam" class="cam" playsinline muted></video>
+
+    <div class="actions">
+      <button class="primary" id="btn-cam" type="button" aria-pressed="false">Mesurer avec la caméra</button>
+      <button class="ghost" id="btn-connect" type="button">Connecter un capteur</button>
+      <button class="ghost" id="btn-sim" type="button" aria-pressed="false">Lancer la simulation</button>
+    </div>
+
+    <div class="sim-controls" id="sim" hidden>
+      <label for="slider">Fréquence simulée <output id="sim-out">75 bpm</output></label>
+      <input type="range" id="slider" min="40" max="180" value="75">
+    </div>
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const heartEl = $('heart'), glowEl = $('glow');
+  const bpmEl = $('bpm'), dotEl = $('dot'), statusEl = $('status');
+  const btnConnect = $('btn-connect'), btnSim = $('btn-sim');
+  const simBox = $('sim'), slider = $('slider'), simOut = $('sim-out');
+  const toastEl = $('toast');
+
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const AMP = reduceMotion ? 0.35 : 1;
+
+  /* ------------------------------------------------------------
+     Mouvement du cœur
+     Un cycle cardiaque (phase 0 → 1) :
+       - léger gonflement (remplissage des oreillettes)
+       - « lub » : contraction rapide des ventricules, relâchement plus lent
+       - « dub » : second battement plus faible (fermeture des valves)
+       - repos
+     La contraction raccourcit et resserre le cœur, avec une légère torsion.
+  ------------------------------------------------------------ */
+  const bump = (p, center, sigL, sigR) => {
+    const d = p - center, s = d < 0 ? sigL : sigR;
+    return Math.exp(-(d * d) / (2 * s * s));
+  };
+
+  function contraction(p) {
+    let v = 0;
+    for (const o of [-1, 0, 1]) {          // gère le raccord entre deux cycles
+      const q = p + o;
+      v += bump(q, 0.15, 0.030, 0.075);    // lub
+      v += 0.50 * bump(q, 0.42, 0.026, 0.050); // dub
+      v -= 0.14 * bump(q, 0.04, 0.030, 0.030); // remplissage
+    }
+    return Math.max(-0.3, Math.min(1, v));
+  }
+
+  function applyPose(c) {
+    const sx = 1 - 0.060 * c * AMP;
+    const sy = 1 - 0.042 * c * AMP;
+    const rot = -1.7 * c * AMP;
+    const ty = -3 * c * AMP;
+    heartEl.style.transform = `translateY(${ty}px) rotate(${rot}deg) scale(${sx}, ${sy})`;
+    glowEl.style.opacity = (0.10 + 0.32 * Math.max(0, c)).toFixed(3);
+    glowEl.style.transform = `scale(${(1 + 0.07 * Math.max(0, c)).toFixed(3)})`;
+  }
+
+  let targetBpm = 0, shownBpm = 0, phase = 0, pose = 0, last = performance.now();
+
+  function frame(now) {
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+
+    // la fréquence s'ajuste en douceur, sans saut de phase
+    shownBpm += (targetBpm - shownBpm) * Math.min(1, dt * 4);
+    if (targetBpm === 0 && shownBpm < 1) shownBpm = 0;
+
+    if (shownBpm > 0) {
+      phase = (phase + dt * shownBpm / 60) % 1;
+      pose = contraction(phase);
+    } else {
+      pose *= Math.pow(0.001, dt);       // retour au repos
+      if (Math.abs(pose) < 0.001) pose = 0;
+    }
+    applyPose(pose);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  function setBpm(bpm) {
+    targetBpm = bpm;
+    bpmEl.textContent = bpm > 0 ? Math.round(bpm) : '--';
+  }
+
+  /* ------------------------------------------------------------
+     Interface
+  ------------------------------------------------------------ */
+  function setStatus(state, text) {
+    dotEl.className = 'dot' + (state ? ' ' + state : '');
+    statusEl.textContent = text;
+  }
+
+  let toastTimer;
+  function toast(message) {
+    toastEl.textContent = message;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), Math.max(3500, message.length * 60));
+  }
+
+  /* ------------------------------------------------------------
+     Simulation
+  ------------------------------------------------------------ */
+  let simulating = false;
+
+  function startSimulation() {
+    stopCamera(true);
+    if (btDevice && btDevice.gatt && btDevice.gatt.connected) btDevice.gatt.disconnect();
+    simulating = true;
+    btnSim.classList.add('active');
+    btnSim.setAttribute('aria-pressed', 'true');
+    btnSim.textContent = 'Arrêter la simulation';
+    simBox.hidden = false;
+    setStatus('sim', 'Simulation en cours');
+    setBpm(parseInt(slider.value, 10));
+  }
+
+  function stopSimulation() {
+    simulating = false;
+    btnSim.classList.remove('active');
+    btnSim.setAttribute('aria-pressed', 'false');
+    btnSim.textContent = 'Lancer la simulation';
+    simBox.hidden = true;
+    setStatus('', 'Aucun capteur connecté');
+    setBpm(0);
+  }
+
+  btnSim.addEventListener('click', () => simulating ? stopSimulation() : startSimulation());
+
+  slider.addEventListener('input', (e) => {
+    const v = parseInt(e.target.value, 10);
+    simOut.textContent = v + ' bpm';
+    if (simulating) setBpm(v);
+  });
+
+  /* ------------------------------------------------------------
+     Capteur Bluetooth (Web Bluetooth, profil Heart Rate)
+  ------------------------------------------------------------ */
+  let btDevice = null;
+
+  async function connectBluetooth() {
+    if (!navigator.bluetooth) {
+      toast('Web Bluetooth n’est pas disponible ici. Ouvrez la page dans Chrome ou Edge.');
+      return;
+    }
+    try {
+      stopCamera(true);
+      if (simulating) stopSimulation();
+      toast('Recherche de capteurs…');
+
+      btDevice = await navigator.bluetooth.requestDevice({
+        filters: [{ services: ['heart_rate'] }],
+        optionalServices: ['battery_service']
+      });
+      const name = btDevice.name || 'Capteur';
+      setStatus('wait', 'Connexion à ' + name + '…');
+      btDevice.addEventListener('gattserverdisconnected', onDisconnected);
+
+      const server = await btDevice.gatt.connect();
+      const service = await server.getPrimaryService('heart_rate');
+      const characteristic = await service.getCharacteristic('heart_rate_measurement');
+      await characteristic.startNotifications();
+      characteristic.addEventListener('characteristicvaluechanged', onHeartRate);
+
+      setStatus('live', name + ' connecté');
+      toast('Capteur connecté');
+      setBpm(0);
+    } catch (error) {
+      console.error('Erreur Bluetooth :', error);
+      if (error.name === 'NotFoundError') {
+        toast('Aucun capteur sélectionné.');
+      } else if (error.name === 'SecurityError') {
+        toast('Le Bluetooth est bloqué dans cet aperçu. Ouvrez la page directement dans Chrome ou Edge.');
+      } else {
+        toast('Connexion impossible : ' + error.message);
+      }
+      setStatus('', 'Aucun capteur connecté');
+    }
+  }
+
+  function onHeartRate(event) {
+    const value = event.target.value;
+    const flags = value.getUint8(0);
+    const bpm = (flags & 0x1) ? value.getUint16(1, true) : value.getUint8(1);
+    setBpm(bpm);
+  }
+
+  function onDisconnected(event) {
+    const name = event.target.name || 'Capteur';
+    toast(name + ' s’est déconnecté.');
+    setStatus('', 'Aucun capteur connecté');
+    setBpm(0);
+    btDevice = null;
+  }
+
+  btnConnect.addEventListener('click', connectBluetooth);
+  if (!navigator.bluetooth) btnConnect.hidden = true;
+
+  /* ------------------------------------------------------------
+     Caméra : photopléthysmographie
+     Le doigt posé sur l’objectif (et le flash) laisse passer la lumière.
+     À chaque battement, le sang change la quantité de rouge captée.
+  ------------------------------------------------------------ */
+  const camVideo = $('cam'), waveEl = $('wave'), btnCam = $('btn-cam');
+  const sampleCanvas = document.createElement('canvas');
+  sampleCanvas.width = 16; sampleCanvas.height = 16;
+  const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+  const FS = 60;          // fréquence de rééchantillonnage (Hz)
+  const WINDOW_S = 12;    // fenêtre d’analyse (s)
+  const MIN_S = 6;        // durée avant la première mesure (s)
+  let camActive = false, camStream = null, camTimer = null;
+  let camSamples = [], bpmHistory = [], smoothedBpm = 0, lastAnalysis = 0;
+
+  function movingAvg(a, w) {
+    const n = a.length, out = new Float32Array(n), ps = new Float64Array(n + 1);
+    for (let i = 0; i < n; i++) ps[i + 1] = ps[i] + a[i];
+    const h = Math.floor(w / 2);
+    for (let i = 0; i < n; i++) {
+      const lo = Math.max(0, i - h), hi = Math.min(n, i + h + 1);
+      out[i] = (ps[hi] - ps[lo]) / (hi - lo);
+    }
+    return out;
+  }
+
+  function scheduleSample() {
+    if (!camActive) return;
+    if (camVideo.requestVideoFrameCallback) camVideo.requestVideoFrameCallback(onFrame);
+    else camTimer = setTimeout(onFrame, 33);
+  }
+
+  function onFrame() {
+    if (!camActive) return;
+    if (camVideo.readyState >= 2) {
+      sampleCtx.drawImage(camVideo, 0, 0, 16, 16);
+      const d = sampleCtx.getImageData(0, 0, 16, 16).data;
+      let r = 0, g = 0, b = 0;
+      const n = d.length / 4;
+      for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+      r /= n; g /= n; b /= n;
+      const t = performance.now() / 1000;
+      const fingerOn = r > 50 && r > 1.4 * g && r > 1.4 * b;
+
+      if (!fingerOn) {
+        if (camSamples.length) { camSamples = []; bpmHistory = []; smoothedBpm = 0; setBpm(0); }
+        setStatus('wait', 'Posez le doigt sur l’objectif');
+      } else {
+        camSamples.push({ t, v: r });
+        while (camSamples.length && t - camSamples[0].t > WINDOW_S) camSamples.shift();
+        if (t - lastAnalysis > 0.5) { lastAnalysis = t; analyse(); }
+      }
+      drawLive();
+    }
+    scheduleSample();
+  }
+
+  function analyse() {
+    const n = camSamples.length;
+    if (n < 10) return;
+    const t0 = camSamples[0].t;
+    const span = camSamples[n - 1].t - t0;
+    if (span < MIN_S) {
+      setStatus('wait', 'Calibrage… ' + Math.ceil(MIN_S - span) + ' s, ne bougez pas');
+      return;
+    }
+    // rééchantillonnage régulier
+    const N = Math.floor(span * FS);
+    const x = new Float32Array(N);
+    let j = 0;
+    for (let i = 0; i < N; i++) {
+      const t = t0 + i / FS;
+      while (j < n - 2 && camSamples[j + 1].t < t) j++;
+      const a = camSamples[j], b = camSamples[j + 1];
+      const k = Math.min(1, Math.max(0, (t - a.t) / ((b.t - a.t) || 1)));
+      x[i] = a.v + (b.v - a.v) * k;
+    }
+    // filtre passe-bande simple : on retire la tendance lente, puis on lisse
+    const slow = movingAvg(x, Math.round(FS * 1.2));
+    const hp = new Float32Array(N);
+    for (let i = 0; i < N; i++) hp[i] = x[i] - slow[i];
+    const sm = movingAvg(hp, 5);
+    const edge = Math.round(FS * 0.6);
+    const f = Array.from(sm.slice(edge, N - edge));
+    const L = f.length;
+    const mean = f.reduce((s, v) => s + v, 0) / L;
+    for (let i = 0; i < L; i++) f[i] -= mean;
+    let r0 = 0;
+    for (let i = 0; i < L; i++) r0 += f[i] * f[i];
+    r0 /= L;
+    if (r0 < 1e-6) { setStatus('wait', 'Signal trop faible, appuyez un peu plus'); return; }
+
+    // autocorrélation entre 40 et 200 bpm
+    const lagMin = Math.floor(FS * 60 / 200), lagMax = Math.min(L - 10, Math.ceil(FS * 60 / 40));
+    const ac = new Float32Array(lagMax + 2);
+    for (let l = lagMin - 1; l <= lagMax + 1; l++) {
+      let s = 0;
+      for (let i = 0; i < L - l; i++) s += f[i] * f[i + l];
+      ac[l] = (s / (L - l)) / r0;
+    }
+    const peaks = [];
+    let best = 0;
+    for (let l = lagMin; l <= lagMax; l++) {
+      if (ac[l] > ac[l - 1] && ac[l] >= ac[l + 1]) {
+        peaks.push(l);
+        if (ac[l] > best) best = ac[l];
+      }
+    }
+    // on prend le premier pic proche du meilleur (évite de tomber sur une harmonique)
+    const lag = peaks.find((l) => ac[l] >= 0.85 * best);
+    if (!lag || best < 0.4) {
+      setStatus('wait', 'Signal faible, restez immobile');
+      return;
+    }
+    const y0 = ac[lag - 1], y1 = ac[lag], y2 = ac[lag + 1];
+    const den = y0 - 2 * y1 + y2;
+    const delta = den !== 0 ? 0.5 * (y0 - y2) / den : 0;
+    const bpm = 60 * FS / (lag + delta);
+
+    bpmHistory.push(bpm);
+    if (bpmHistory.length > 5) bpmHistory.shift();
+    const sorted = [...bpmHistory].sort((a, b) => a - b);
+    const median = sorted[Math.floor(sorted.length / 2)];
+    smoothedBpm = smoothedBpm ? smoothedBpm * 0.5 + median * 0.5 : median;
+    setBpm(Math.round(smoothedBpm));
+    setStatus('live', 'Mesure en cours');
+  }
+
+  function drawLive() {
+    const ctx = waveEl.getContext('2d');
+    const W = waveEl.width, H = waveEl.height;
+    ctx.clearRect(0, 0, W, H);
+    const s = camSamples.slice(-150);
+    if (s.length < 30) return;
+    const v = s.map((p) => p.v);
+    const base = movingAvg(v, 30);
+    const y = v.map((val, i) => -(val - base[i]));
+    const sm = movingAvg(y, 3);
+    let m = 0;
+    for (const val of sm) m = Math.max(m, Math.abs(val));
+    if (m < 1e-6) return;
+    ctx.beginPath();
+    for (let i = 0; i < sm.length; i++) {
+      const px = (i / 149) * W;
+      const py = H / 2 - (sm[i] / m) * (H / 2 - 6);
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+    ctx.strokeStyle = '#c8141e';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+
+  async function startCamera() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      toast('La caméra n’est pas disponible ici. Ouvrez la page directement dans Chrome.');
+      return;
+    }
+    try {
+      if (simulating) stopSimulation();
+      if (btDevice && btDevice.gatt && btDevice.gatt.connected) btDevice.gatt.disconnect();
+      setStatus('wait', 'Ouverture de la caméra…');
+
+      camStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 30 } },
+        audio: false
+      });
+      camVideo.srcObject = camStream;
+      await camVideo.play();
+
+      let torch = false;
+      try {
+        const track = camStream.getVideoTracks()[0];
+        const caps = track.getCapabilities ? track.getCapabilities() : {};
+        if (caps.torch) {
+          await track.applyConstraints({ advanced: [{ torch: true }] });
+          torch = true;
+        }
+      } catch (e) { /* flash non disponible */ }
+
+      camActive = true;
+      camSamples = []; bpmHistory = []; smoothedBpm = 0; lastAnalysis = 0;
+      btnCam.classList.add('active');
+      btnCam.setAttribute('aria-pressed', 'true');
+      btnCam.textContent = 'Arrêter la mesure';
+      waveEl.hidden = false;
+      setStatus('wait', 'Posez le doigt sur l’objectif');
+      toast(torch
+        ? 'Flash allumé. Couvrez l’objectif et le flash avec le doigt.'
+        : 'Flash indisponible ici : couvrez l’objectif avec le doigt, face à une lampe ou une fenêtre.');
+      scheduleSample();
+    } catch (error) {
+      console.error('Erreur caméra :', error);
+      if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
+      const framed = window.self !== window.top;
+      if (error.name === 'NotAllowedError') {
+        toast(framed
+          ? 'La page est affichée dans un cadre (aperçu) qui bloque la caméra, même si Chrome l’autorise. Ouvrez-la hors de l’aperçu.'
+          : 'Caméra refusée (NotAllowedError). Vérifiez l’autorisation du site dans les réglages de Chrome.');
+      } else if (error.name === 'NotFoundError') {
+        toast('Aucune caméra trouvée.');
+      } else {
+        toast('Caméra indisponible (' + error.name + ') : ' + error.message);
+      }
+      setStatus('', 'Aucun capteur connecté');
+    }
+  }
+
+  function stopCamera(silent) {
+    if (!camActive && !camStream) return;
+    camActive = false;
+    clearTimeout(camTimer);
+    if (camStream) { camStream.getTracks().forEach((t) => t.stop()); camStream = null; }
+    camVideo.srcObject = null;
+    btnCam.classList.remove('active');
+    btnCam.setAttribute('aria-pressed', 'false');
+    btnCam.textContent = 'Mesurer avec la caméra';
+    waveEl.hidden = true;
+    camSamples = []; bpmHistory = []; smoothedBpm = 0;
+    if (!silent) { setStatus('', 'Aucun capteur connecté'); setBpm(0); }
+  }
+
+  btnCam.addEventListener('click', () => camActive ? stopCamera(false) : startCamera());
+</script>
+</body>
+</html>
