@@ -163,6 +163,24 @@
   input[type=range]::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--red); border: 0; cursor: pointer; }
 
   [hidden] { display: none !important; }
+  .icon {
+    margin-left: auto;
+    align-self: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 1px solid var(--line);
+    border-radius: 50%;
+    background: transparent;
+    color: var(--ink);
+  }
+  .icon:hover { border-color: #bdbdb8; }
+  .icon .off { display: none; }
+  .icon.muted { color: var(--muted); }
+  .icon.muted .on { display: none; }
+  .icon.muted .off { display: inline; }
   .primary.active { background: #fff; color: var(--red); }
   .wave { display: block; width: 100%; height: 36px; margin: -8px 0 16px; }
   .cam { position: fixed; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
@@ -242,6 +260,13 @@
     <div class="reading">
       <span id="bpm">--</span>
       <span class="unit">bpm</span>
+      <button class="icon" id="btn-sound" type="button" aria-pressed="true" aria-label="Couper le son">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 9.5v5h3.5L12 18.5v-13L7.5 9.5z"/>
+          <path class="on" d="M15.5 9a4 4 0 0 1 0 6M18 6.5a8 8 0 0 1 0 11"/>
+          <path class="off" d="M16 9.5l5 5M21 9.5l-5 5"/>
+        </svg>
+      </button>
     </div>
     <div class="status" aria-live="polite">
       <span class="dot" id="dot"></span>
@@ -321,8 +346,13 @@
     if (targetBpm === 0 && shownBpm < 1) shownBpm = 0;
 
     if (shownBpm > 0) {
+      const prev = phase;
       phase = (phase + dt * shownBpm / 60) % 1;
       pose = contraction(phase);
+      if (soundOn && audioCtx) {
+        if (crossed(prev, phase, 0.12)) playS1();   // début de la contraction
+        if (crossed(prev, phase, 0.40)) playS2();   // fin de la contraction
+      }
     } else {
       pose *= Math.pow(0.001, dt);       // retour au repos
       if (Math.abs(pose) < 0.001) pose = 0;
@@ -674,6 +704,101 @@
   }
 
   btnCam.addEventListener('click', () => camActive ? stopCamera(false) : startCamera());
+
+  /* ------------------------------------------------------------
+     Son : bruits du cœur synthétisés (Web Audio), synchronisés avec le mouvement
+     S1 « lub » : fermeture des valves mitrale et tricuspide, grave et plus long
+     S2 « dub » : fermeture des valves aortique et pulmonaire, plus court et plus net
+  ------------------------------------------------------------ */
+  let audioCtx = null, master = null, noiseBuf = null, soundOn = true;
+  const btnSound = $('btn-sound');
+
+  function ensureAudio() {
+    try {
+      // iOS récent : permet de jouer le son même avec le commutateur silencieux
+      if (navigator.audioSession) navigator.audioSession.type = 'playback';
+      if (!audioCtx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        audioCtx = new AC();
+        master = audioCtx.createGain();
+        master.gain.value = 0.9;
+        const soft = audioCtx.createBiquadFilter();
+        soft.type = 'lowpass';
+        soft.frequency.value = 900;
+        master.connect(soft);
+        soft.connect(audioCtx.destination);
+        // bruit blanc réutilisable
+        const len = Math.floor(audioCtx.sampleRate * 0.3);
+        noiseBuf = audioCtx.createBuffer(1, len, audioCtx.sampleRate);
+        const ch = noiseBuf.getChannelData(0);
+        for (let i = 0; i < len; i++) ch[i] = Math.random() * 2 - 1;
+        // déverrouillage iOS : un son silencieux pendant le geste de l’utilisateur
+        const s = audioCtx.createBufferSource();
+        s.buffer = audioCtx.createBuffer(1, 1, audioCtx.sampleRate);
+        s.connect(audioCtx.destination);
+        s.start(0);
+      }
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    } catch (e) { console.warn('Audio indisponible', e); }
+  }
+  document.addEventListener('click', ensureAudio, true);
+
+  function crossed(a, b, x) {
+    return a <= b ? (a < x && b >= x) : (a < x || b >= x);
+  }
+
+  function thump(o) {
+    const t = audioCtx.currentTime + 0.005;
+    const g = o.gain * (0.94 + Math.random() * 0.12);   // légère variation naturelle
+
+    // corps grave
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(o.f0, t);
+    osc.frequency.exponentialRampToValueAtTime(o.f1, t + o.dur);
+    const og = audioCtx.createGain();
+    og.gain.setValueAtTime(0.0001, t);
+    og.gain.exponentialRampToValueAtTime(g, t + 0.008);
+    og.gain.exponentialRampToValueAtTime(0.0001, t + o.dur);
+    osc.connect(og); og.connect(master);
+    osc.start(t); osc.stop(t + o.dur + 0.02);
+
+    // harmonique, pour qu’on l’entende sur les petits haut-parleurs de téléphone
+    const osc2 = audioCtx.createOscillator();
+    osc2.type = 'triangle';
+    osc2.frequency.setValueAtTime(o.f0 * 2.2, t);
+    osc2.frequency.exponentialRampToValueAtTime(o.f1 * 2.2, t + o.dur);
+    const og2 = audioCtx.createGain();
+    og2.gain.setValueAtTime(0.0001, t);
+    og2.gain.exponentialRampToValueAtTime(g * 0.5, t + 0.006);
+    og2.gain.exponentialRampToValueAtTime(0.0001, t + o.dur * 0.7);
+    osc2.connect(og2); og2.connect(master);
+    osc2.start(t); osc2.stop(t + o.dur + 0.02);
+
+    // bruit filtré : turbulence et frottement des valves
+    const n = audioCtx.createBufferSource();
+    n.buffer = noiseBuf;
+    const lp = audioCtx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = o.noiseCut;
+    const ng = audioCtx.createGain();
+    ng.gain.setValueAtTime(0.0001, t);
+    ng.gain.exponentialRampToValueAtTime(g * o.noise, t + 0.005);
+    ng.gain.exponentialRampToValueAtTime(0.0001, t + o.noiseDur);
+    n.connect(lp); lp.connect(ng); ng.connect(master);
+    n.start(t); n.stop(t + o.noiseDur + 0.02);
+  }
+
+  const playS1 = () => thump({ f0: 65, f1: 40, dur: 0.17, gain: 0.8,  noise: 0.35, noiseCut: 260, noiseDur: 0.08 });
+  const playS2 = () => thump({ f0: 95, f1: 58, dur: 0.11, gain: 0.55, noise: 0.28, noiseCut: 380, noiseDur: 0.05 });
+
+  btnSound.addEventListener('click', () => {
+    soundOn = !soundOn;
+    btnSound.classList.toggle('muted', !soundOn);
+    btnSound.setAttribute('aria-pressed', String(soundOn));
+    btnSound.setAttribute('aria-label', soundOn ? 'Couper le son' : 'Activer le son');
+  });
 </script>
 </body>
 </html>
