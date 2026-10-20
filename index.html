@@ -277,7 +277,7 @@
 
     <div class="actions">
       <button class="primary" id="btn-cam" type="button" aria-pressed="false">Mesurer avec la caméra</button>
-      <button class="ghost" id="btn-connect" type="button">Connecter un capteur</button>
+      <button class="primary" id="btn-connect" type="button" aria-pressed="false">Mesurer avec le Polar</button>
       <button class="ghost" id="btn-sim" type="button" aria-pressed="false">Lancer la simulation</button>
     </div>
 
@@ -345,7 +345,9 @@
     shownBpm += (targetBpm - shownBpm) * Math.min(1, dt * 4);
     if (targetBpm === 0 && shownBpm < 1) shownBpm = 0;
 
-    if (shownBpm > 0) {
+    if (driveMode === 'beats') {
+      pose = beatPose(now, dt);
+    } else if (shownBpm > 0) {
       const prev = phase;
       phase = (phase + dt * shownBpm / 60) % 1;
       pose = contraction(phase);
@@ -390,6 +392,7 @@
 
   function startSimulation() {
     stopCamera(true);
+    setDrive('phase');
     if (btDevice && btDevice.gatt && btDevice.gatt.connected) btDevice.gatt.disconnect();
     simulating = true;
     btnSim.classList.add('active');
@@ -425,7 +428,10 @@
 
   async function connectBluetooth() {
     if (!navigator.bluetooth) {
-      toast('Web Bluetooth n’est pas disponible ici. Ouvrez la page dans Chrome ou Edge.');
+      const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
+      toast(ios
+        ? 'Le Bluetooth web n’existe pas dans Chrome ni Safari sur iPhone. Ouvrez cette page dans l’app Bluefy.'
+        : 'Web Bluetooth n’est pas disponible ici. Ouvrez la page dans Chrome ou Edge.');
       return;
     }
     try {
@@ -449,6 +455,7 @@
 
       setStatus('live', name + ' connecté');
       toast('Capteur connecté');
+      setPolarUi(true);
       setBpm(0);
     } catch (error) {
       console.error('Erreur Bluetooth :', error);
@@ -463,23 +470,110 @@
     }
   }
 
+  /* ------------------------------------------------------------
+     Mode « battements » : le cœur suit chaque vrai battement du capteur.
+     Le profil Bluetooth Heart Rate envoie, avec le BPM, les intervalles
+     entre battements (RR, en 1/1024 s). On les met en file d’attente
+     et on joue chaque battement à son heure, avec environ 1 s de retard
+     (le temps de recevoir le paquet suivant).
+  ------------------------------------------------------------ */
+  const BEAT_LAG = 1100;                // retard de lecture (ms)
+  let driveMode = 'phase';              // 'phase' : rythme moyen, 'beats' : battement par battement
+  let beatQueue = [], beatClock = 0, lastBeatT = 0, lastRR = 800, s1Done = true, s2Done = true;
+
+  function setDrive(mode) {
+    if (mode === driveMode) return;
+    driveMode = mode;
+    beatQueue.length = 0;
+    beatClock = 0;
+    lastBeatT = 0;
+  }
+
+  function scheduleBeats(list) {
+    const now = performance.now();
+    for (const rr of list) {
+      if (rr < 250 || rr > 2500) continue;           // valeur aberrante
+      let T = beatClock ? beatClock + rr : now + BEAT_LAG;
+      if (T < now + 100 || T > now + 4000) {         // file vide ou trop avancée : on resynchronise
+        beatQueue.length = 0;
+        T = now + BEAT_LAG;
+      }
+      beatQueue.push({ t: T, rr });
+      beatClock = T;
+    }
+  }
+
+  function beatPose(now, dt) {
+    while (beatQueue.length && beatQueue[0].t <= now) {
+      const b = beatQueue.shift();
+      lastBeatT = b.t; lastRR = b.rr; s1Done = false; s2Done = false;
+    }
+    if (!lastBeatT || now - lastBeatT > 3000) {      // plus de battement récent : retour au repos
+      const p = pose * Math.pow(0.001, dt);
+      return Math.abs(p) < 0.001 ? 0 : p;
+    }
+    const t = now - lastBeatT;                       // ms depuis le dernier battement
+    const nextIn = (beatQueue.length ? beatQueue[0].t : lastBeatT + lastRR) - now;
+    // contraction rapide, relâchement plus lent, second battement plus faible,
+    // et léger gonflement juste avant le battement suivant
+    let v = bump(t, 90, 22, 60) + 0.5 * bump(t, 320, 18, 40) - 0.14 * bump(nextIn, 70, 35, 35);
+    v = Math.max(-0.3, Math.min(1, v));
+    if (soundOn && audioCtx) {
+      if (!s1Done && t >= 55)  { s1Done = true; if (t < 200) playS1(); }
+      if (!s2Done && t >= 305) { s2Done = true; if (t < 450 && lastRR > 420) playS2(); }
+    }
+    return v;
+  }
+
   function onHeartRate(event) {
-    const value = event.target.value;
-    const flags = value.getUint8(0);
-    const bpm = (flags & 0x1) ? value.getUint16(1, true) : value.getUint8(1);
+    const dv = event.target.value;
+    const flags = dv.getUint8(0);
+    const hr16 = flags & 0x01;                       // BPM sur 16 bits ou 8 bits
+    const contactSupported = flags & 0x04, contact = flags & 0x02;
+    const hasRR = flags & 0x10;                      // intervalles RR présents
+    let offset = 1;
+    const bpm = hr16 ? dv.getUint16(offset, true) : dv.getUint8(offset);
+    offset += hr16 ? 2 : 1;
+    if (flags & 0x08) offset += 2;                   // énergie dépensée (ignorée)
+    const rr = [];
+    if (hasRR) {
+      while (offset + 1 < dv.byteLength) {
+        rr.push(dv.getUint16(offset, true) / 1024 * 1000);   // 1/1024 s -> ms
+        offset += 2;
+      }
+    }
+    if (contactSupported && !contact) {
+      setStatus('wait', 'Pas de contact : humidifiez les électrodes');
+      setBpm(0);
+      setDrive('phase');
+      return;
+    }
+    setStatus('live', (btDevice && btDevice.name ? btDevice.name : 'Capteur') + ' connecté');
     setBpm(bpm);
+    if (hasRR) { setDrive('beats'); scheduleBeats(rr); } else setDrive('phase');
   }
 
   function onDisconnected(event) {
     const name = event.target.name || 'Capteur';
+    btDevice = null;
+    setPolarUi(false);
+    setDrive('phase');
+    if (simulating || camActive) return;             // une autre mesure a pris le relais
     toast(name + ' s’est déconnecté.');
     setStatus('', 'Aucun capteur connecté');
     setBpm(0);
-    btDevice = null;
   }
 
-  btnConnect.addEventListener('click', connectBluetooth);
-  if (!navigator.bluetooth) btnConnect.hidden = true;
+  function setPolarUi(active) {
+    btnConnect.classList.toggle('active', active);
+    btnConnect.setAttribute('aria-pressed', String(active));
+    btnConnect.textContent = active ? 'Arrêter la mesure Polar' : 'Mesurer avec le Polar';
+  }
+
+  btnConnect.addEventListener('click', () => {
+    if (btDevice && btDevice.gatt && btDevice.gatt.connected) btDevice.gatt.disconnect();
+    else connectBluetooth();
+  });
 
   /* ------------------------------------------------------------
      Caméra : photopléthysmographie
@@ -641,6 +735,7 @@
     }
     try {
       if (simulating) stopSimulation();
+      setDrive('phase');
       if (btDevice && btDevice.gatt && btDevice.gatt.connected) btDevice.gatt.disconnect();
       setStatus('wait', 'Ouverture de la caméra…');
 
