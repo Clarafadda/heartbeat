@@ -177,6 +177,19 @@
     color: var(--ink);
   }
   .icon:hover { border-color: #bdbdb8; }
+  .debug {
+    position: fixed;
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    left: 12px;
+    margin: 0;
+    padding: 6px 8px;
+    font: 11px/1.45 ui-monospace, Menlo, Consolas, monospace;
+    color: #555;
+    background: rgba(255, 255, 255, .85);
+    border-radius: 6px;
+    white-space: pre;
+    z-index: 9;
+  }
   .icon .off { display: none; }
   .icon.muted { color: var(--muted); }
   .icon.muted .on { display: none; }
@@ -278,6 +291,7 @@
     <div class="actions">
       <button class="primary" id="btn-cam" type="button" aria-pressed="false">Mesurer avec la caméra</button>
       <button class="primary" id="btn-connect" type="button" aria-pressed="false">Mesurer avec le Polar</button>
+      <button class="primary" id="btn-watch" type="button" aria-pressed="false">Mesurer avec la montre</button>
       <button class="ghost" id="btn-sim" type="button" aria-pressed="false">Lancer la simulation</button>
     </div>
 
@@ -288,6 +302,7 @@
   </main>
 
   <div class="toast" id="toast" role="status"></div>
+  <pre class="debug" id="debug" hidden></pre>
 
 <script>
   const $ = (id) => document.getElementById(id);
@@ -319,7 +334,7 @@
     for (const o of [-1, 0, 1]) {          // gère le raccord entre deux cycles
       const q = p + o;
       v += bump(q, 0.15, 0.030, 0.075);    // lub
-      v += 0.50 * bump(q, 0.42, 0.026, 0.050); // dub
+      v += 0.18 * bump(q, 0.42, 0.026, 0.050); // dub (S2) : simple rebond, pas une 2e contraction
       v -= 0.14 * bump(q, 0.04, 0.030, 0.030); // remplissage
     }
     return Math.max(-0.3, Math.min(1, v));
@@ -426,7 +441,7 @@
   ------------------------------------------------------------ */
   let btDevice = null;
 
-  async function connectBluetooth() {
+  async function connectBluetooth(kind) {
     if (!navigator.bluetooth) {
       const ios = /iPhone|iPad|iPod/.test(navigator.userAgent);
       toast(ios
@@ -440,8 +455,8 @@
       toast('Recherche de capteurs…');
 
       btDevice = await navigator.bluetooth.requestDevice({
-        filters: [{ services: ['heart_rate'] }],
-        optionalServices: ['battery_service']
+        filters: kind === 'polar' ? [{ namePrefix: 'Polar' }] : [{ services: ['heart_rate'] }],
+        optionalServices: kind === 'polar' ? ['heart_rate', 'battery_service'] : ['battery_service']
       });
       const name = btDevice.name || 'Capteur';
       setStatus('wait', 'Connexion à ' + name + '…');
@@ -455,6 +470,7 @@
 
       setStatus('live', name + ' connecté');
       toast('Capteur connecté');
+      btKind = kind;
       setPolarUi(true);
       setBpm(0);
     } catch (error) {
@@ -477,7 +493,11 @@
      et on joue chaque battement à son heure, avec environ 1 s de retard
      (le temps de recevoir le paquet suivant).
   ------------------------------------------------------------ */
-  const BEAT_LAG = 1100;                // retard de lecture (ms)
+  let beatLag = 1800;                   // retard de lecture (ms) ; augmente si la file se vide
+  const DEBUG = /[?&]debug/.test(location.search);   // ajouter ?debug à l’adresse pour voir les données du capteur
+  const dbgEl = $('debug');
+  if (dbgEl) dbgEl.hidden = !DEBUG;
+  let dbgCount = 0;
   let driveMode = 'phase';              // 'phase' : rythme moyen, 'beats' : battement par battement
   let beatQueue = [], beatClock = 0, lastBeatT = 0, lastRR = 800, s1Done = true, s2Done = true;
 
@@ -493,10 +513,14 @@
     const now = performance.now();
     for (const rr of list) {
       if (rr < 250 || rr > 2500) continue;           // valeur aberrante
-      let T = beatClock ? beatClock + rr : now + BEAT_LAG;
-      if (T < now + 100 || T > now + 4000) {         // file vide ou trop avancée : on resynchronise
+      let T = beatClock ? beatClock + rr : now + beatLag;
+      if (beatClock && T < now + 100) {              // la file s’est vidée : on rétablit un tampon plus large
+        beatLag = Math.min(beatLag + 200, 3000);
         beatQueue.length = 0;
-        T = now + BEAT_LAG;
+        T = now + beatLag;
+      } else if (T > now + beatLag + 3000) {         // trop d’avance : on repart proprement
+        beatQueue.length = 0;
+        T = now + beatLag;
       }
       beatQueue.push({ t: T, rr });
       beatClock = T;
@@ -516,7 +540,7 @@
     const nextIn = (beatQueue.length ? beatQueue[0].t : lastBeatT + lastRR) - now;
     // contraction rapide, relâchement plus lent, second battement plus faible,
     // et léger gonflement juste avant le battement suivant
-    let v = bump(t, 90, 22, 60) + 0.5 * bump(t, 320, 18, 40) - 0.14 * bump(nextIn, 70, 35, 35);
+    let v = bump(t, 90, 22, 60) + 0.18 * bump(t, 320, 18, 40) - 0.14 * bump(nextIn, 70, 35, 35);
     v = Math.max(-0.3, Math.min(1, v));
     if (soundOn && audioCtx) {
       if (!s1Done && t >= 55)  { s1Done = true; if (t < 200) playS1(); }
@@ -551,6 +575,13 @@
     setStatus('live', (btDevice && btDevice.name ? btDevice.name : 'Capteur') + ' connecté');
     setBpm(bpm);
     if (hasRR) { setDrive('beats'); scheduleBeats(rr); } else setDrive('phase');
+    if (DEBUG && dbgEl) {
+      dbgCount++;
+      dbgEl.textContent = 'notif ' + dbgCount + '   bpm ' + bpm + '   flags 0x' + flags.toString(16) +
+        '\nrr (ms) ' + (rr.length ? rr.map((x) => Math.round(x)).join(', ') : '-') +
+        '\nfile ' + beatQueue.length + '   avance ' + (beatClock ? Math.round(beatClock - performance.now()) : 0) +
+        ' ms   tampon ' + beatLag + ' ms';
+    }
   }
 
   function onDisconnected(event) {
@@ -564,16 +595,30 @@
     setBpm(0);
   }
 
+  const btnWatch = $('btn-watch');
+  let btKind = null;                                 // 'polar' ou 'watch'
+
   function setPolarUi(active) {
-    btnConnect.classList.toggle('active', active);
-    btnConnect.setAttribute('aria-pressed', String(active));
-    btnConnect.textContent = active ? 'Arrêter la mesure Polar' : 'Mesurer avec le Polar';
+    const polar = active && btKind === 'polar', watch = active && btKind === 'watch';
+    btnConnect.classList.toggle('active', polar);
+    btnConnect.setAttribute('aria-pressed', String(polar));
+    btnConnect.textContent = polar ? 'Arrêter la mesure Polar' : 'Mesurer avec le Polar';
+    btnWatch.classList.toggle('active', watch);
+    btnWatch.setAttribute('aria-pressed', String(watch));
+    btnWatch.textContent = watch ? 'Arrêter la mesure montre' : 'Mesurer avec la montre';
   }
 
-  btnConnect.addEventListener('click', () => {
-    if (btDevice && btDevice.gatt && btDevice.gatt.connected) btDevice.gatt.disconnect();
-    else connectBluetooth();
-  });
+  function onBtClick(kind) {
+    if (btDevice && btDevice.gatt && btDevice.gatt.connected) {
+      if (btKind === kind) btDevice.gatt.disconnect();
+      else toast('Arrêtez d’abord la mesure en cours.');
+      return;
+    }
+    connectBluetooth(kind);
+  }
+
+  btnConnect.addEventListener('click', () => onBtClick('polar'));   // sangle Polar (nom « Polar … »)
+  btnWatch.addEventListener('click', () => onBtClick('watch'));     // tout capteur cardiaque Bluetooth standard
 
   /* ------------------------------------------------------------
      Caméra : photopléthysmographie
